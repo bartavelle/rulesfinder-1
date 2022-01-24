@@ -48,8 +48,10 @@ fn read_wordlist(wordlist: &str) -> Vec<Vec<u8>> {
 }
 
 fn shorter_rules(a: &[rules::Rule], b: &[rules::Rule]) -> bool {
-    let la = rules::show_rules(a, false).len();
-    let lb = rules::show_rules(b, false).len();
+    let la = rules::show_rules(a, rules::ShowMode::JtRHashcatcompat)
+        .or_else(|| rules::show_rules(a, rules::ShowMode::Hashcat));
+    let lb = rules::show_rules(b, rules::ShowMode::JtRHashcatcompat)
+        .or_else(|| rules::show_rules(b, rules::ShowMode::Hashcat));
     la < lb || (la == lb && a < b)
 }
 
@@ -220,9 +222,11 @@ fn main() {
     }
     progress.finish();
 
-    if !hashcat_mode {
-        println!("!! hashcat logic ON");
-    }
+    let mut curmode = if hashcat_mode {
+        rules::ShowMode::Hashcat
+    } else {
+        rules::ShowMode::JtR
+    };
 
     // greedy coverage
     let mut last_set: Vec<u64> = Vec::new();
@@ -256,23 +260,44 @@ fn main() {
         }
         hits.remove(&best_rules);
         last_set = best_set;
+
         if best_count > 0 {
             total_cracked += best_count;
             // do not print the final loop, where 'hits' is empty and nothing was found!
-            if details_mode {
-                println!(
-                    "{} // [{} - {}]",
-                    rules::show_rules(&best_rules, hashcat_mode),
-                    best_count,
-                    total_cracked
-                );
+            let (mrule_str, newmode) = if curmode == rules::ShowMode::Hashcat {
+                (rules::show_rules(&best_rules, curmode), curmode)
             } else {
-                println!("{}", rules::show_rules(&best_rules, hashcat_mode));
+                match rules::show_rules(&best_rules, curmode) {
+                    None => {
+                        let nmode = if curmode == rules::ShowMode::JtR {
+                            rules::ShowMode::JtRHashcatcompat
+                        } else {
+                            rules::ShowMode::JtR
+                        };
+                        (rules::show_rules(&best_rules, nmode), nmode)
+                    }
+                    Some(s) => (Some(s), curmode),
+                }
+            };
+            if curmode == rules::ShowMode::JtR && curmode != newmode {
+                println!("!! hashcat logic ON");
+            }
+            if curmode == rules::ShowMode::JtRHashcatcompat && curmode != newmode {
+                println!("!! hashcat logic OFF");
+            }
+            curmode = newmode;
+            let rule_str = mrule_str
+                .unwrap_or_else(|| format!("// BUG! the next rule is impossible {:?}", best_rules));
+
+            if details_mode {
+                println!("{} // [{} - {}] {:?}", rule_str, best_count, total_cracked, &best_rules);
+            } else {
+                println!("{}", rule_str);
             }
         }
     }
 
-    if !hashcat_mode {
+    if curmode == rules::ShowMode::JtRHashcatcompat {
         println!("!! hashcat logic OFF");
     }
 
